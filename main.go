@@ -2,9 +2,11 @@ package main
 
 import (
 	"archive/zip"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,67 +20,79 @@ const (
 	TEMP_FILE   = "/tmp/go_appengine.zip"
 )
 
-func main() {
+var (
+	version, install string
+)
 
-	fmt.Println("Google Appengine SDK Download")
-	v := getVersion()
-	fmt.Printf("Found version %s\n", v)
-	fmt.Println("Downloading...")
-	download(v)
-	fmt.Println("Extracting new version")
-	unzip(TEMP_FILE)
-	fmt.Println("Done")
+func init() {
+	pwd, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = getVersion()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	flag.StringVar(&version, "version", version, "Version of App Engine SDK")
+	flag.StringVar(&install, "install", pwd, "Directory to install sdk")
 }
 
-func getVersion() string {
+func main() {
+	flag.Parse()
+
+	log.Println("Google Appengine SDK Download")
+	log.Println("Using version " + version)
+	log.Println("Downloading...")
+
+	download()
+	log.Println("Extracting new version in " + install)
+	unzip(TEMP_FILE)
+	log.Println("Done")
+}
+
+func getVersion() error {
 	resp, err := http.Get(URL_VERSION)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	lines := strings.Split(string(b), "\n")
 	for _, l := range lines {
 		s := strings.Split(l, ":")
 		if s[0] == "release" {
 			reg := regexp.MustCompile("[^0-9//.]+")
-			return reg.ReplaceAllString(s[1], "")
+			version = reg.ReplaceAllString(s[1], "")
 		}
 	}
-	return ""
+	return nil
 }
 
-func download(version string) {
+func download() error {
 	resp, err := http.Get(fmt.Sprintf(URL_SDK, version))
 	if err != nil {
-		panic(err)
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	out, err := os.Create(TEMP_FILE)
 	if err != nil {
-		panic(err)
-		return
+		return err
 	}
 	defer out.Close()
 
 	n, err := io.Copy(out, resp.Body)
 	if err != nil {
-		panic(err)
-		return
+		return err
 	}
-	fmt.Printf("Total of bytes %v\n", n)
+	log.Printf("Total of bytes %v\n", n)
 
-	err = unzip(TEMP_FILE)
-	if err != nil {
-		panic(err)
-		return
-	}
+	return unzip(TEMP_FILE)
 }
 
 func unzip(zipfile string) error {
@@ -96,7 +110,7 @@ func unzip(zipfile string) error {
 		defer zipped.Close()
 
 		// get the individual file name and extract the current directory
-		path := filepath.Join("./", f.Name)
+		path := filepath.Join(install, f.Name)
 
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(path, f.Mode())
