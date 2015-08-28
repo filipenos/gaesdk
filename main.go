@@ -41,10 +41,29 @@ func init() {
 func main() {
 	flag.Parse()
 
-	log.Println("Google Appengine SDK Download")
+	log.Println("Google Appengine SDK Manager")
 	log.Println("Using version " + version)
-	log.Println("Downloading...")
 
+	local, err := verifyVersion()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if local == "" {
+		log.Printf("No versions found in %s/\n", install)
+	} else if local == version {
+		log.Printf("You are using the version %s in %s\n", local, install)
+		log.Println("Aborting")
+		return
+	} else {
+		log.Printf("Found version %s installed in %s\n", local, install)
+		log.Println("Backup your old version")
+		err = os.Rename(install+"/go_appengine", install+"/go_appengine-"+local)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	log.Println("Downloading...")
 	download()
 	log.Println("Extracting new version in " + install)
 	unzip(TEMP_FILE)
@@ -58,19 +77,43 @@ func getVersion() error {
 	}
 	defer resp.Body.Close()
 
-	b, err := ioutil.ReadAll(resp.Body)
+	version, err = readVersion(resp.Body)
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func verifyVersion() (string, error) {
+	file, err := os.Open(install + "/go_appengine/VERSION")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	v, err := readVersion(file)
+	if err != nil {
+		return "", err
+	}
+	return v, nil
+}
+
+func readVersion(reader io.ReadCloser) (string, error) {
+	b, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return "", err
 	}
 	lines := strings.Split(string(b), "\n")
 	for _, l := range lines {
 		s := strings.Split(l, ":")
 		if s[0] == "release" {
 			reg := regexp.MustCompile("[^0-9//.]+")
-			version = reg.ReplaceAllString(s[1], "")
+			return reg.ReplaceAllString(s[1], ""), nil
 		}
 	}
-	return nil
+	return "", fmt.Errorf("Not found")
 }
 
 func download() error {
