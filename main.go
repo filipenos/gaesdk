@@ -61,12 +61,11 @@ func main() {
 	if local == "" {
 		log.Printf("No versions found in %s/\n", install)
 	} else if local == version && !override {
-		log.Printf("You are using the version %s in %s\n", local, install)
-		log.Println("Aborting")
+		log.Printf("You are already using the latest version %s at %s\n", local, install)
 		return
 	} else {
 		log.Printf("Found version %s installed in %s\n", local, install)
-		log.Println("Backup your old version")
+		log.Println("Backing up your old version")
 		err = os.Rename(install+"/go_appengine", install+"/go_appengine-"+local)
 		if err != nil {
 			log.Fatal(err)
@@ -74,9 +73,7 @@ func main() {
 	}
 
 	log.Println("Downloading...")
-	download()
-	log.Println("Extracting new version in " + install)
-	unzip(TEMP_FILE)
+	downloadAndExtract()
 	log.Println("Done")
 }
 
@@ -126,36 +123,37 @@ func readVersion(reader io.ReadCloser) (string, error) {
 	return "", fmt.Errorf("Not found")
 }
 
-func download() error {
+func downloadAndExtract() error {
 	resp, err := http.Get(fmt.Sprintf(URL_SDK, version))
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	out, err := os.Create(TEMP_FILE)
+	out, err := ioutil.TempFile(os.TempDir(), "go_appengine_")
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
-	n, err := io.Copy(out, resp.Body)
+	size, err := io.Copy(out, resp.Body)
 	if err != nil {
 		return err
 	}
-	log.Printf("Total of bytes %v\n", n)
-
-	return unzip(TEMP_FILE)
+	_, err = out.Seek(0, 0)
+	if err != nil {
+		return err
+	}
+	return unzip(out, size)
 }
 
-func unzip(zipfile string) error {
-	reader, err := zip.OpenReader(zipfile)
+func unzip(r io.ReaderAt, size int64) error {
+	reader, err := zip.NewReader(r, size)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
 
-	for _, f := range reader.Reader.File {
+	for _, f := range reader.File {
 		zipped, err := f.Open()
 		if err != nil {
 			return err
