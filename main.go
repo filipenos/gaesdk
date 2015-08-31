@@ -157,8 +157,9 @@ func unzip(zipfile string) error {
 
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(path, f.Mode())
-			//fmt.Println("Creating directory", path)
+			fmt.Println("creating:", path)
 		} else {
+			os.MkdirAll(filepath.Dir(path), os.ModeDir|os.ModePerm)
 			writer, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, f.Mode())
 			if err != nil {
 				return err
@@ -169,7 +170,7 @@ func unzip(zipfile string) error {
 			if _, err = io.Copy(writer, zipped); err != nil {
 				return err
 			}
-			//fmt.Println("Decompressing : ", path)
+			fmt.Println("inflating:", path)
 		}
 	}
 	return nil
