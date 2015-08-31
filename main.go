@@ -22,6 +22,7 @@ const (
 
 var (
 	version, install string
+	override         bool
 )
 
 func init() {
@@ -29,20 +30,29 @@ func init() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = getVersion()
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	flag.StringVar(&version, "version", version, "Version of App Engine SDK")
+	flag.StringVar(&version, "version", "latest", "Version of App Engine SDK")
 	flag.StringVar(&install, "install", pwd, "Directory to install sdk")
+	flag.BoolVar(&override, "override", false, "Force to override installation")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
+	}
 }
 
 func main() {
 	flag.Parse()
 
 	log.Println("Google Appengine SDK Manager")
-	log.Println("Using version " + version)
+	if version == "" || version == "latest" {
+		log.Println("Searching latest version of sdk")
+		if err := getVersion(); err != nil {
+			log.Fatal(err)
+		}
+		log.Println("Found version:", version)
+	} else {
+		log.Println("Using:", version)
+	}
 
 	local, err := verifyVersion()
 	if err != nil {
@@ -50,7 +60,7 @@ func main() {
 	}
 	if local == "" {
 		log.Printf("No versions found in %s/\n", install)
-	} else if local == version {
+	} else if local == version && !override {
 		log.Printf("You are using the version %s in %s\n", local, install)
 		log.Println("Aborting")
 		return
