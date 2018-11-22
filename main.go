@@ -232,7 +232,7 @@ func getRemoveVersions() ([]string, error) {
 		}
 	}
 
-	sort.Sort(versions)
+	sort.Strings(versions)
 
 	return versions, nil
 }
