@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -87,8 +88,13 @@ func main() {
 		}
 	}
 
-	_, ok := remoteVersions[version]
-	if !ok {
+	found := false
+	for _, v := range remoteVersions {
+		if v == version {
+			found = true
+		}
+	}
+	if !found {
 		log.Fatalf("Version %s not found on server", version)
 	}
 
@@ -201,8 +207,8 @@ func extract(tempFile string) error {
 	return nil
 }
 
-func getRemoveVersions() (map[string]string, error) {
-	versions := make(map[string]string, 0)
+func getRemoveVersions() ([]string, error) {
+	versions := make([]string, 0, 0)
 
 	resp, err := http.Get(URL_STORAGE)
 	if err != nil {
@@ -221,10 +227,12 @@ func getRemoveVersions() (map[string]string, error) {
 		if featured && strings.Contains(c.Key, "go_appengine_sdk_linux_amd64-") {
 			subs := re.FindStringSubmatch(c.Key)
 			if len(subs) == 2 {
-				versions[subs[1]] = subs[0]
+				versions = append(versions, strings.TrimSpace(subs[1]))
 			}
 		}
 	}
+
+	sort.Sort(versions)
 
 	return versions, nil
 }
