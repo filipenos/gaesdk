@@ -1,7 +1,7 @@
 package main
 
 import (
-	"archive/zip"
+	"encoding/xml"
 	"flag"
 	"fmt"
 	"io"
@@ -9,21 +9,41 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"regexp"
 	"strings"
 )
 
 const (
 	URL_VERSION = "https://storage.googleapis.com/appengine-sdks/featured/VERSION"
-	URL_SDK     = "https://storage.googleapis.com/appengine-sdks/featured/go_appengine_sdk_linux_amd64-%s.zip"
-	TEMP_FILE   = "/tmp/go_appengine.zip"
+	URL_STORAGE = "https://storage.googleapis.com/appengine-sdks/"
+	FILENAME    = "go_appengine_sdk_linux_amd64-%s.zip"
 )
 
 var (
 	version, install string
-	override         bool
+	listRemote       bool
 )
+
+type RemoteSDK struct {
+	XMLName     xml.Name
+	Text        string
+	Xmlns       string
+	Name        string
+	Prefix      string
+	Marker      string
+	NextMarker  string
+	IsTruncated string
+	Contents    []struct {
+		Text           string
+		Key            string
+		Generation     string
+		MetaGeneration string
+		LastModified   string
+		ETag           string
+		Size           string
+	}
+}
 
 func init() {
 	pwd, err := os.Getwd()
@@ -33,7 +53,7 @@ func init() {
 
 	flag.StringVar(&version, "version", "latest", "Version of App Engine SDK")
 	flag.StringVar(&install, "install", pwd, "Directory to install sdk")
-	flag.BoolVar(&override, "override", false, "Force to override installation")
+	flag.BoolVar(&listRemote, "list-remote", false, "List remote versions")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		flag.PrintDefaults()
@@ -44,9 +64,10 @@ func main() {
 	flag.Parse()
 
 	log.Println("Google Appengine SDK Manager")
+
 	if version == "" || version == "latest" {
 		log.Println("Searching latest version of sdk")
-		if err := getVersion(); err != nil {
+		if err := remoteVersion(); err != nil {
 			log.Fatal(err)
 		}
 		log.Println("Found version:", version)
@@ -54,13 +75,30 @@ func main() {
 		log.Println("Using:", version)
 	}
 
-	local, err := verifyVersion()
+	remoteVersions, err := getRemoveVersions()
+	if err != nil {
+		log.Panic("Error on get remove versions: %v", err)
+	}
+
+	if listRemote {
+		log.Println("Listing remote versions")
+		for _, v := range remoteVersions {
+			log.Println(v)
+		}
+	}
+
+	_, ok := remoteVersions[version]
+	if !ok {
+		log.Fatalf("Version %s not found on server", version)
+	}
+
+	local, err := localVersion()
 	if err != nil {
 		log.Fatal(err)
 	}
 	if local == "" {
 		log.Printf("No versions found in %s/\n", install)
-	} else if local == version && !override {
+	} else if local == version {
 		log.Printf("You are already using the latest version %s at %s\n", local, install)
 		return
 	} else {
@@ -73,11 +111,20 @@ func main() {
 	}
 
 	log.Println("Downloading...")
-	downloadAndExtract()
+	tempFile, err := download(version)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = extract(tempFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	log.Println("Done")
 }
 
-func getVersion() error {
+func remoteVersion() error {
 	resp, err := http.Get(URL_VERSION)
 	if err != nil {
 		return err
@@ -91,7 +138,7 @@ func getVersion() error {
 	return nil
 }
 
-func verifyVersion() (string, error) {
+func localVersion() (string, error) {
 	file, err := os.Open(install + "/go_appengine/VERSION")
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -123,63 +170,61 @@ func readVersion(reader io.ReadCloser) (string, error) {
 	return "", fmt.Errorf("Not found")
 }
 
-func downloadAndExtract() error {
-	resp, err := http.Get(fmt.Sprintf(URL_SDK, version))
+func download(version string) (string, error) {
+	filename := fmt.Sprintf(FILENAME, version)
+	log.Printf("Downloading file %s", filename)
+
+	url := fmt.Sprintf("%sfeatured/%s", URL_STORAGE, filename)
+	log.Printf("Downloading file from %s", url)
+
+	tempFile := fmt.Sprintf("%s/%s", os.TempDir(), filename)
+	log.Printf("Saving on %s", tempFile)
+
+	cmd := exec.Command("wget", url, "-O", tempFile)
+	b, err := cmd.CombinedOutput()
 	if err != nil {
-		return err
+		return "", fmt.Errorf("Error get file: %v, %s", err, string(b))
+	}
+
+	return tempFile, nil
+}
+
+func extract(tempFile string) error {
+	log.Printf("Extracting file %s", tempFile)
+
+	cmd := exec.Command("unzip", tempFile, "-d", install)
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Error on unzip files: %v, %s", err, string(b))
+	}
+
+	return nil
+}
+
+func getRemoveVersions() (map[string]string, error) {
+	versions := make(map[string]string, 0)
+
+	resp, err := http.Get(URL_STORAGE)
+	if err != nil {
+		return versions, err
 	}
 	defer resp.Body.Close()
 
-	out, err := ioutil.TempFile(os.TempDir(), "go_appengine_")
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	size, err := io.Copy(out, resp.Body)
-	if err != nil {
-		return err
-	}
-	_, err = out.Seek(0, 0)
-	if err != nil {
-		return err
-	}
-	return unzip(out, size)
-}
-
-func unzip(r io.ReaderAt, size int64) error {
-	reader, err := zip.NewReader(r, size)
-	if err != nil {
-		return err
+	var r RemoteSDK
+	if err := xml.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return versions, err
 	}
 
-	for _, f := range reader.File {
-		zipped, err := f.Open()
-		if err != nil {
-			return err
-		}
-		defer zipped.Close()
-
-		// get the individual file name and extract the current directory
-		path := filepath.Join(install, f.Name)
-
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(path, f.Mode())
-			fmt.Println("creating:", path)
-		} else {
-			os.MkdirAll(filepath.Dir(path), os.ModeDir|os.ModePerm)
-			writer, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, f.Mode())
-			if err != nil {
-				return err
+	re := regexp.MustCompile("amd64-([0-9.]+).zip")
+	for _, c := range r.Contents {
+		featured := strings.Contains(c.Key, "featured")
+		if featured && strings.Contains(c.Key, "go_appengine_sdk_linux_amd64-") {
+			subs := re.FindStringSubmatch(c.Key)
+			if len(subs) == 2 {
+				versions[subs[1]] = subs[0]
 			}
-
-			defer writer.Close()
-
-			if _, err = io.Copy(writer, zipped); err != nil {
-				return err
-			}
-			fmt.Println("inflating:", path)
 		}
 	}
-	return nil
+
+	return versions, nil
 }
